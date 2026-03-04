@@ -47,7 +47,7 @@ AST_FUNCTION_DEFINATION = "AST_FUNCTION_DEFINATION"
 AST_FUNCTION_CALL = "AST_FUNCTION_CALL"
 AST_RETURN = "AST_RETURN"
 AST_STRING_CONSTANT = "AST_STRING_CONSTANT"
-
+AST_NUMBER_CONSTANT = "AST_STRING_NUMBER"
 
 BYTE = ir.IntType(8)
 BYTE_PTR = ir.PointerType(BYTE)
@@ -92,6 +92,12 @@ class AstStringConst:
         self.value = val
 
 
+class AstNumberConst:
+    def __init__(self, val) -> None:
+        self.type = AST_NUMBER_CONSTANT
+        self.value = val
+
+
 class AstBlock:
     pass
 
@@ -122,6 +128,9 @@ def ParseLine(tokens, pc):
                             arg += tokens[pc][0]
                             pc += 1
                         arg = AstStringConst(arg)
+                    if tokens[pc][1] == "NUM":
+                        arg += str(tokens[pc][0])
+                        arg = AstNumberConst(arg)
                     pc += 1
 
                     fc.args.append(arg)
@@ -182,6 +191,7 @@ def ParseToAst(tokens):
 
 
 tokens = tokenise(src)
+print(tokens)
 ast = ParseToAst(tokens)
 
 
@@ -194,9 +204,22 @@ def evalFunction(builder, module, code):
                 args = []
                 for arg in x.args:
                     if arg.type == AST_STRING_CONSTANT:
-                        msg = arg.value + "\0"
+                        msg = arg.value + "\n\0"
                         msg_ty = ir.ArrayType(BYTE, len(msg))
                         msg_var = ir.GlobalVariable(module, msg_ty, name=arg.value)
+                        msg_var.linkage = "internal"
+                        msg_var.global_constant = True
+                        msg_var.initializer = ir.Constant(
+                            msg_ty, bytearray(msg.encode("utf8"))
+                        )
+                        msg_ptr = builder.gep(msg_var, [ZERO, ZERO], inbounds=True)
+                        args.append(msg_ptr)
+                    elif arg.type == AST_NUMBER_CONSTANT:
+                        msg = arg.value + "\n\0"
+                        msg_ty = ir.ArrayType(BYTE, len(msg))
+                        msg_var = ir.GlobalVariable(
+                            module, msg_ty, name="num" + arg.value
+                        )
                         msg_var.linkage = "internal"
                         msg_var.global_constant = True
                         msg_var.initializer = ir.Constant(
