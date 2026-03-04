@@ -15,6 +15,7 @@ KEYWORDS = ("function", "let", "if", "else", "for", "while", "const", "return")
 
 
 def tokenise(code: str):
+    isStr = False
     pc = 0
     tokens = []
     while pc < len(code):
@@ -35,10 +36,15 @@ def tokenise(code: str):
                 pc += 1
             tokens.append((builder, "NUM"))
         elif code[pc] == " ":
+            if isStr:
+                tokens.append((code[pc], "WS"))
             pc += 1
         else:
             tokens.append((code[pc], "SYM"))
+            if code[pc] == '"':
+                isStr = not isStr
             pc += 1
+
     return tokens
 
 
@@ -246,7 +252,6 @@ def evalAST(tr):
         if x.type == AST_FUNCTION_DEFINATION:
             args = []
             fn_ty = ir.FunctionType(x.ret, x.args)
-
             fn = ir.Function(module, fn_ty, name=x.name)
             block = fn.append_basic_block("entry")
             builder = ir.IRBuilder(block)

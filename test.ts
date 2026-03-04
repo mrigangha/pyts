@@ -1,4 +1,4 @@
 function main() {
   print(123);
-  print("Hurray");
+  print("Hello World!!!");
 }
