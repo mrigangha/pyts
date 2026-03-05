@@ -54,6 +54,8 @@ AST_FUNCTION_CALL = "AST_FUNCTION_CALL"
 AST_RETURN = "AST_RETURN"
 AST_STRING_CONSTANT = "AST_STRING_CONSTANT"
 AST_NUMBER_CONSTANT = "AST_STRING_NUMBER"
+AST_OBJECT_VARIABLE_DECLARATION = "AST_VARIABLE_DECLARATION"
+AST_VARIABLE_CALL = "AST_VARIABLE_CALL"
 
 BYTE = ir.IntType(8)
 BYTE_PTR = ir.PointerType(BYTE)
@@ -77,6 +79,20 @@ class AstFunctionDefination:
 
     def append(self, block):
         self.code.append(block)
+
+
+class AstObjectVariableDeclaration:
+    def __init__(self, name, value=None, dt=INT32) -> None:
+        self.name = name
+        self.type = AST_OBJECT_VARIABLE_DECLARATION
+        self.val = value
+        self.dt = dt
+
+
+class AstVariableCall:
+    def __init__(self, name) -> None:
+        self.name = name
+        self.type = AST_VARIABLE_CALL
 
 
 class AstFunctionCall:
@@ -134,15 +150,38 @@ def ParseLine(tokens, pc):
                             arg += tokens[pc][0]
                             pc += 1
                         arg = AstStringConst(arg)
-                    if tokens[pc][1] == "NUM":
+                    elif tokens[pc][1] == "NUM":
                         arg += str(tokens[pc][0])
                         arg = AstNumberConst(arg)
+                    elif tokens[pc][1] == "TEXT":
+                        name = tokens[pc][0]
+                        arg = AstVariableCall(name)
                     pc += 1
 
                     fc.args.append(arg)
                 obj = fc
             pc += 1
+        elif tokens[pc][1] == "KEYWORD":
+            if tokens[pc][0] == "let":
+                pc += 1
+                name = tokens[pc][0]
+                pc += 1
+                if tokens[pc][1] == "NUM":
+                    name += tokens[pc][0]
+                    pc += 1
+                if tokens[pc][0] != ":":
+                    raise Exception("Expected :")
 
+                pc += 1
+                fd = AstObjectVariableDeclaration(name)
+                if tokens[pc][0] + tokens[pc + 1][0] == "i32":
+                    pc += 1
+                    pc += 1
+                    if tokens[pc][0] == "=":
+                        pc += 1
+                        fd.val = int(tokens[pc][0])
+                    obj = fd
+                    pc += 1
     return (obj, pc)
 
 
@@ -197,15 +236,16 @@ def ParseToAst(tokens):
 
 
 tokens = tokenise(src)
-print(tokens)
+# print(tokens)
 ast = ParseToAst(tokens)
 
 
 def evalFunction(builder, module, code):
+    obj = {}
     for x in code:
         if x == None:
             continue
-        if x.type == AST_FUNCTION_CALL:
+        elif x.type == AST_FUNCTION_CALL:
             if x.name == "print":
                 args = []
                 for arg in x.args:
@@ -233,7 +273,18 @@ def evalFunction(builder, module, code):
                         )
                         msg_ptr = builder.gep(msg_var, [ZERO, ZERO], inbounds=True)
                         args.append(msg_ptr)
+                    elif arg.type == AST_VARIABLE_CALL:
+                        msg = "%d\n\0"
+                        fmt_ptr = builder.gep(
+                            std["i32_fmt_var"], [ZERO, ZERO], inbounds=True
+                        )
+                        args.append(fmt_ptr)
+                        args.append(obj[arg.name])
                 builder.call(std["print"], args)
+        elif x.type == AST_OBJECT_VARIABLE_DECLARATION:
+            x_ptr = builder.alloca(x.dt, name="x")  # int x
+            builder.store(ir.Constant(x.dt, x.val), x_ptr)  # x = 42
+            obj[x.name] = builder.load(x_ptr, name=x.name)  # read x
 
 
 std = {}
@@ -247,10 +298,17 @@ def evalAST(tr):
         INT32, [BYTE_PTR], var_arg=True
     )  # returns i32 char* == ir.pointer of i8 and variable arguments=True
     std["print"] = ir.Function(module, printf_ty, name="printf")
+    fmt = "%d\n\0"
+    std["i32_fmt_ty"] = ir.ArrayType(BYTE, len(fmt))
+    std["i32_fmt_var"] = ir.GlobalVariable(module, std["i32_fmt_ty"], name="fmt")
+    std["i32_fmt_var"].linkage = "internal"
+    std["i32_fmt_var"].global_constant = True
+    std["i32_fmt_var"].initializer = ir.Constant(
+        std["i32_fmt_ty"], bytearray(fmt.encode("utf8"))
+    )
 
     for x in tr:
         if x.type == AST_FUNCTION_DEFINATION:
-            args = []
             fn_ty = ir.FunctionType(x.ret, x.args)
             fn = ir.Function(module, fn_ty, name=x.name)
             block = fn.append_basic_block("entry")
