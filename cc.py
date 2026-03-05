@@ -56,6 +56,12 @@ AST_STRING_CONSTANT = "AST_STRING_CONSTANT"
 AST_NUMBER_CONSTANT = "AST_STRING_NUMBER"
 AST_OBJECT_VARIABLE_DECLARATION = "AST_VARIABLE_DECLARATION"
 AST_VARIABLE_CALL = "AST_VARIABLE_CALL"
+AST_SIMPLE_EXPRESSION = "AST_SIMPLE_EXPRESSION"
+AST_ARTHIMETIC_OPERATOR = "AST_ARTHIMETIC_OPERATOR"
+AST_MATH_ADD = "AST_MATH_ADD"
+AST_MATH_SUBTRACT = "AST_MATH_SUBTRACT"
+AST_MATH_MULTIPLY = "AST_MATH_MULTIPLY"
+AST_MATH_DIVIDE = "AST_MATH_DIVIDE"
 
 BYTE = ir.IntType(8)
 BYTE_PTR = ir.PointerType(BYTE)
@@ -86,7 +92,19 @@ class AstObjectVariableDeclaration:
         self.name = name
         self.type = AST_OBJECT_VARIABLE_DECLARATION
         self.val = value
+        self.exp = None
         self.dt = dt
+
+
+class AstMathOps:
+    def __init__(self, type) -> None:
+        self.type = type
+
+
+class AstSimpleExpression:
+    def __init__(self) -> None:
+        self.type = AST_SIMPLE_EXPRESSION
+        self.operands = []
 
 
 class AstVariableCall:
@@ -178,8 +196,35 @@ def ParseLine(tokens, pc):
                     pc += 1
                     pc += 1
                     if tokens[pc][0] == "=":
+                        exp = AstSimpleExpression()
                         pc += 1
-                        fd.val = int(tokens[pc][0])
+                        while tokens[pc][0] != ";" and tokens[pc][0] != "\n":
+                            if tokens[pc][0] == "(" or tokens[pc][0] == ")":
+                                pc += 1
+                                continue
+                            elif tokens[pc][1] == "TEXT":
+                                name = tokens[pc][0]
+                                pc += 1
+                                if tokens[pc][1] == "NUM":
+                                    name += tokens[pc][0]
+                                    pc += 1
+                                exp.operands.append(AstVariableCall(name))
+                            elif tokens[pc][1] == "NUM":
+                                exp.operands.append(AstNumberConst(tokens[pc][0]))
+                                pc += 1
+                            elif tokens[pc][1] == "SYM":
+                                exp.operands.append(tokens[pc][0])
+                                pc += 1
+                            else:
+                                raise Exception(
+                                    "Error Invalide token:"
+                                    + tokens[pc][0]
+                                    + "Expected a variable or a number"
+                                )
+                        fd.val = exp
+                        # print(exp.operands)
+                        pc -= 1
+
                     obj = fd
                     pc += 1
     return (obj, pc)
@@ -287,7 +332,57 @@ def evalFunction(builder, module, code):
         elif x.type == AST_OBJECT_VARIABLE_DECLARATION:
             if obj.get(x.name) == None:
                 obj[x.name] = builder.alloca(x.dt, name=x.name)  # int x
-            builder.store(ir.Constant(x.dt, x.val), obj[x.name])  # x = 42
+            # builder.store(ir.Constant(x.dt, int(x.val)), obj[x.name])  # x = 42
+            evalNumericExpression(obj, x.name, module, builder, x.val)
+
+
+def evalNumericExpression(obj, name, module, builder, expression: AstSimpleExpression):
+    co = None
+    stack = []
+    for x in expression.operands:
+        if x in ("+", "/", "*", "-"):
+            co = x
+        elif x.type == AST_NUMBER_CONSTANT:
+            const = ir.Constant(INT32, int(x.value))
+            if co != None:
+                val2 = stack.pop()
+
+                if co == "+":
+                    temp = builder.add(const, val2, name="temp")
+                    stack.append(temp)
+                    co = None
+                elif co == "/":
+                    temp = builder.sdiv(val2, const, name="temp")
+                    stack.append(temp)
+                elif co == "*":
+                    temp = builder.mul(val2, const, name="temp")
+                    stack.append(temp)
+                elif co == "-":
+                    temp = builder.sub(val2, const, name="temp")
+                    stack.append(temp)
+            else:
+                stack.append(const)
+        elif x.type == AST_VARIABLE_CALL:
+            var1 = builder.load(obj[x.name], name=x.name + "_val")
+            if co != None:
+                val2 = stack.pop()
+                if co == "+":
+                    temp = builder.add(var1, val2, name="temp")
+                    stack.append(temp)
+                    co = None
+                elif co == "/":
+                    temp = builder.sdiv(val2, var1, name="temp")
+                    stack.append(temp)
+                elif co == "*":
+                    temp = builder.mul(val2, var1, name="temp")
+                    stack.append(temp)
+                elif co == "-":
+                    temp = builder.sub(val2, var1, name="temp")
+                    stack.append(temp)
+            else:
+                stack.append(var1)
+
+    builder.store(stack[-1], obj[name])
 
 
 std = {}
