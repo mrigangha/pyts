@@ -279,12 +279,15 @@ def evalFunction(builder, module, code):
                             std["i32_fmt_var"], [ZERO, ZERO], inbounds=True
                         )
                         args.append(fmt_ptr)
-                        args.append(obj[arg.name])
+                        x_val = builder.load(
+                            obj[arg.name], name=x.name
+                        )  # read x, name=x.name+"val")  # read x
+                        args.append(x_val)
                 builder.call(std["print"], args)
         elif x.type == AST_OBJECT_VARIABLE_DECLARATION:
-            x_ptr = builder.alloca(x.dt, name="x")  # int x
-            builder.store(ir.Constant(x.dt, x.val), x_ptr)  # x = 42
-            obj[x.name] = builder.load(x_ptr, name=x.name)  # read x
+            if obj.get(x.name) == None:
+                obj[x.name] = builder.alloca(x.dt, name=x.name)  # int x
+            builder.store(ir.Constant(x.dt, x.val), obj[x.name])  # x = 42
 
 
 std = {}
