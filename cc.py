@@ -62,6 +62,10 @@ AST_MATH_ADD = "AST_MATH_ADD"
 AST_MATH_SUBTRACT = "AST_MATH_SUBTRACT"
 AST_MATH_MULTIPLY = "AST_MATH_MULTIPLY"
 AST_MATH_DIVIDE = "AST_MATH_DIVIDE"
+AST_CONDITIONAL = "AST_CONDITIONAL"
+AST_IF = "AST_IF"
+AST_ELSE = "AST_ELSE"
+
 
 BYTE = ir.IntType(8)
 BYTE_PTR = ir.PointerType(BYTE)
@@ -107,6 +111,25 @@ class AstSimpleExpression:
         self.operands = []
 
 
+class AstConditional:
+    def __init__(self) -> None:
+        self.type = AST_CONDITIONAL
+        self.code = []
+
+
+class AstIF:
+    def __init__(self, exp: AstSimpleExpression) -> None:
+        self.type = AST_IF
+        self.exp = exp
+        self.code = []
+
+
+class AstElse:
+    def __init__(self, block) -> None:
+        self.type = AST_ELSE
+        self.code = []
+
+
 class AstVariableCall:
     def __init__(self, name) -> None:
         self.name = name
@@ -140,6 +163,48 @@ class AstNumberConst:
 
 class AstBlock:
     pass
+
+
+def ParseCondition(tokens, pc):
+    exp = AstSimpleExpression()
+    val = AstConditional()
+    while tokens[pc][0] != " }":
+        if tokens[pc][0] == "if":
+            pc += 1
+            while tokens[pc][0] != "{":
+                if tokens[pc][0] == "(" or tokens[pc][0] == ")":
+                    pc += 1
+                    continue
+                elif tokens[pc][1] == "TEXT":
+                    name = tokens[pc][0]
+                    pc += 1
+                    if tokens[pc][1] == "NUM":
+                        name += tokens[pc][0]
+                        pc += 1
+                    exp.operands.append(AstVariableCall(name))
+                elif tokens[pc][1] == "NUM":
+                    exp.operands.append(AstNumberConst(tokens[pc][0]))
+                    pc += 1
+                elif tokens[pc][1] == "SYM":
+                    exp.operands.append(tokens[pc][0])
+                    pc += 1
+                else:
+                    raise Exception(
+                        "Error Invalide token:"
+                        + tokens[pc][0]
+                        + "Expected a variable or a number"
+                    )
+            fd = AstIF(exp)
+            pc += 1
+            while tokens[pc][0] != "}":
+                obj = ParseLine(tokens, pc)
+                pc = obj[1]
+                fd.code.append(obj[0])
+                pc += 1
+            val.code.append(fd)
+            return val, pc
+
+        pc += 1
 
 
 def ParseLine(tokens, pc):
@@ -227,6 +292,8 @@ def ParseLine(tokens, pc):
 
                     obj = fd
                     pc += 1
+            elif tokens[pc][0] == "if":
+                return ParseCondition(tokens, pc)
     return (obj, pc)
 
 
@@ -285,8 +352,30 @@ tokens = tokenise(src)
 ast = ParseToAst(tokens)
 
 
-def evalFunction(builder, module, code):
-    obj = {}
+def evalConditional(obj, builder, module, fn, ast: AstConditional):
+    blocks = []
+    for x in range(len(ast.code)):
+        blocks.append(fn.append_basic_block("then"))
+    end_block = fn.append_basic_block("end")
+    for i, x in enumerate(ast.code):
+        if x.type == AST_IF:
+            co = None
+            stack = []
+            opr = x.exp.operands
+            val1 = builder.load(obj[opr[0].name], name=opr[0].name + "_val")
+            val2 = builder.load(obj[opr[2].name], name=opr[2].name + "_val")
+            cond = builder.icmp_signed(opr[1], val1, val2, name="cond")
+            builder.cbranch(cond, blocks[i], end_block)
+            builder = ir.IRBuilder(blocks[i])
+            evalFunction(builder, module, x.code, fn, obj)
+            builder.branch(end_block)
+    builder = ir.IRBuilder(end_block)
+    return builder
+
+
+def evalFunction(builder, module, code, fn, obj_={}):
+    obj = obj_
+    val_pool = []
     for x in code:
         if x == None:
             continue
@@ -331,9 +420,16 @@ def evalFunction(builder, module, code):
                 builder.call(std["print"], args)
         elif x.type == AST_OBJECT_VARIABLE_DECLARATION:
             if obj.get(x.name) == None:
+                val_pool.append(x.name)
                 obj[x.name] = builder.alloca(x.dt, name=x.name)  # int x
             # builder.store(ir.Constant(x.dt, int(x.val)), obj[x.name])  # x = 42
             evalNumericExpression(obj, x.name, module, builder, x.val)
+        elif x.type == AST_CONDITIONAL:
+            builder = evalConditional(obj, builder, module, fn, x)
+
+    for x in val_pool:
+        del obj[x]
+    return builder
 
 
 def evalNumericExpression(obj, name, module, builder, expression: AstSimpleExpression):
@@ -389,6 +485,7 @@ std = {}
 
 
 def evalAST(tr):
+    obj = {}
     module = ir.Module(name="mymod")
 
     # ── declare printf ──────────────────────────────
@@ -411,7 +508,7 @@ def evalAST(tr):
             fn = ir.Function(module, fn_ty, name=x.name)
             block = fn.append_basic_block("entry")
             builder = ir.IRBuilder(block)
-            evalFunction(builder, module, x.code)
+            builder = evalFunction(builder, module, x.code, fn)
             builder.ret(ir.Constant(INT32, 0))
     target = binding.Target.from_default_triple()
     tm = target.create_target_machine(reloc="static")
