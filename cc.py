@@ -125,7 +125,7 @@ class AstIF:
 
 
 class AstElse:
-    def __init__(self, block) -> None:
+    def __init__(self) -> None:
         self.type = AST_ELSE
         self.code = []
 
@@ -202,6 +202,23 @@ def ParseCondition(tokens, pc):
                 fd.code.append(obj[0])
                 pc += 1
             val.code.append(fd)
+            pc += 1
+            while tokens[pc][0] == "\n":
+                pc += 1
+            if tokens[pc][0] == "else":
+                pc += 1
+                fd = AstElse()
+
+                pc += 1
+                while tokens[pc][0] != "}":
+                    obj = ParseLine(tokens, pc)
+
+                    pc = obj[1]
+                    fd.code.append(obj[0])
+                    pc += 1
+                val.code.append(fd)
+            else:
+                pc -= 1
             return val, pc
 
         pc += 1
@@ -348,7 +365,6 @@ def ParseToAst(tokens):
 
 
 tokens = tokenise(src)
-# print(tokens)
 ast = ParseToAst(tokens)
 
 
@@ -365,7 +381,16 @@ def evalConditional(obj, builder, module, fn, ast: AstConditional):
             val1 = builder.load(obj[opr[0].name], name=opr[0].name + "_val")
             val2 = builder.load(obj[opr[2].name], name=opr[2].name + "_val")
             cond = builder.icmp_signed(opr[1], val1, val2, name="cond")
-            builder.cbranch(cond, blocks[i], end_block)
+            if len(ast.code) == 2:
+                builder.cbranch(cond, blocks[i], blocks[i + 1])
+            else:
+                builder.cbranch(cond, blocks[i], end_block)
+            builder = ir.IRBuilder(blocks[i])
+            evalFunction(builder, module, x.code, fn, obj)
+            builder.branch(end_block)
+        elif x.type == AST_ELSE:
+            print(x)
+            print(x.code)
             builder = ir.IRBuilder(blocks[i])
             evalFunction(builder, module, x.code, fn, obj)
             builder.branch(end_block)
