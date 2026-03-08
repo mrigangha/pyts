@@ -65,6 +65,7 @@ AST_MATH_DIVIDE = "AST_MATH_DIVIDE"
 AST_CONDITIONAL = "AST_CONDITIONAL"
 AST_IF = "AST_IF"
 AST_ELSE = "AST_ELSE"
+AST_WHILE = "AST_WHILE"
 
 
 BYTE = ir.IntType(8)
@@ -124,6 +125,13 @@ class AstIF:
         self.code = []
 
 
+class AstWhile:
+    def __init__(self, exp: AstSimpleExpression) -> None:
+        self.type = AST_WHILE
+        self.exp = exp
+        self.code = []
+
+
 class AstElse:
     def __init__(self) -> None:
         self.type = AST_ELSE
@@ -163,6 +171,49 @@ class AstNumberConst:
 
 class AstBlock:
     pass
+
+
+def ParseWhile(tokens, pc):
+
+    exp = AstSimpleExpression()
+    val = None
+    if tokens[pc][0] == "while":
+        pc += 1
+        while tokens[pc][0] != "{":
+            if tokens[pc][0] == "(" or tokens[pc][0] == ")":
+                pc += 1
+                continue
+            elif tokens[pc][1] == "TEXT":
+                name = tokens[pc][0]
+                pc += 1
+                if tokens[pc][1] == "NUM":
+                    name += tokens[pc][0]
+                    pc += 1
+                exp.operands.append(AstVariableCall(name))
+            elif tokens[pc][1] == "NUM":
+                exp.operands.append(AstNumberConst(tokens[pc][0]))
+                pc += 1
+            elif tokens[pc][1] == "SYM":
+                exp.operands.append(tokens[pc][0])
+                pc += 1
+            else:
+                raise Exception(
+                    "Error Invalide token:"
+                    + tokens[pc][0]
+                    + "Expected a variable or a number"
+                )
+        fd = AstWhile(exp)
+        pc += 1
+
+        while tokens[pc][0] != "}":
+            obj = ParseLine(tokens, pc)
+            pc = obj[1]
+            fd.code.append(obj[0])
+            pc += 1
+        val = fd
+        return val, pc
+
+        pc += 1
 
 
 def ParseCondition(tokens, pc):
@@ -212,7 +263,6 @@ def ParseCondition(tokens, pc):
                 pc += 1
                 while tokens[pc][0] != "}":
                     obj = ParseLine(tokens, pc)
-
                     pc = obj[1]
                     fd.code.append(obj[0])
                     pc += 1
@@ -234,7 +284,6 @@ def ParseLine(tokens, pc):
             if tokens[pc][1] == "NUM":
                 name += tokens[pc][0]
                 pc += 1
-
             if tokens[pc][0] == "(":
                 fc = AstFunctionCall(
                     name,
@@ -311,6 +360,8 @@ def ParseLine(tokens, pc):
                     pc += 1
             elif tokens[pc][0] == "if":
                 return ParseCondition(tokens, pc)
+            elif tokens[pc][0] == "while":
+                return ParseWhile(tokens, pc)
     return (obj, pc)
 
 
@@ -368,6 +419,24 @@ tokens = tokenise(src)
 ast = ParseToAst(tokens)
 
 
+def evalWhile(obj, builder, module, fn, ast: AstWhile):
+    cond_block = fn.append_basic_block("cond")  # check condition
+    body_block = fn.append_basic_block("body")  # loop body
+    end_block = fn.append_basic_block("end")  # after loop
+    opr = ast.exp.operands
+    builder.branch(cond_block)
+    builder = ir.IRBuilder(cond_block)
+    val1 = builder.load(obj[opr[0].name], name=opr[0].name + "_val")
+    val2 = builder.load(obj[opr[2].name], name=opr[2].name + "_val")
+    cond = builder.icmp_signed(opr[1], val1, val2, name="cond")
+    builder.cbranch(cond, body_block, end_block)
+    builder = ir.IRBuilder(body_block)
+    builder = evalFunction(builder, module, ast.code, fn, obj)
+    builder.branch(cond_block)
+    builder = ir.IRBuilder(end_block)
+    return builder
+
+
 def evalConditional(obj, builder, module, fn, ast: AstConditional):
     blocks = []
     for x in range(len(ast.code)):
@@ -386,11 +455,9 @@ def evalConditional(obj, builder, module, fn, ast: AstConditional):
             else:
                 builder.cbranch(cond, blocks[i], end_block)
             builder = ir.IRBuilder(blocks[i])
-            evalFunction(builder, module, x.code, fn, obj)
+            builder = evalFunction(builder, module, x.code, fn, obj)
             builder.branch(end_block)
         elif x.type == AST_ELSE:
-            print(x)
-            print(x.code)
             builder = ir.IRBuilder(blocks[i])
             evalFunction(builder, module, x.code, fn, obj)
             builder.branch(end_block)
@@ -451,6 +518,8 @@ def evalFunction(builder, module, code, fn, obj_={}):
             evalNumericExpression(obj, x.name, module, builder, x.val)
         elif x.type == AST_CONDITIONAL:
             builder = evalConditional(obj, builder, module, fn, x)
+        elif x.type == AST_WHILE:
+            builder = evalWhile(obj, builder, module, fn, x)
 
     for x in val_pool:
         del obj[x]

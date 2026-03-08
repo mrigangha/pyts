@@ -1,14 +1,13 @@
 function main() {
-  let a: i32 = 1020;
-  let b: i32 = (230 + a) / 10 - 100 * 80;
-  let c: i32 = a;
-  print(c);
-  if (a > b) {
-    print("a is greater than b");
-  } 
-  else {
-    print("a is less than b");
+  let a: i32 = 100;
+  let b: i32 = 0;
+  let c: i32 = 50;
+  while (a > b) {
+    if (a < c) {
+      print("A is less than 50");
+    } else {
+      print("A is greater than or equal to 50");
+    }
+    let a: i32 = a - 1;
   }
-  print("This is");
-  print(b);
 }
