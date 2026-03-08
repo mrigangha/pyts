@@ -510,6 +510,40 @@ def evalFunction(builder, module, code, fn, obj_={}):
                         )  # read x, name=x.name+"val")  # read x
                         args.append(x_val)
                 builder.call(std["print"], args)
+            else:
+                args = []
+                for arg in x.args:
+                    if arg.type == AST_STRING_CONSTANT:
+                        msg = arg.value + "\0"
+                        msg_ty = ir.ArrayType(BYTE, len(msg))
+                        msg_var = ir.GlobalVariable(module, msg_ty, name=arg.value)
+                        msg_var.linkage = "internal"
+                        msg_var.global_constant = True
+                        msg_var.initializer = ir.Constant(
+                            msg_ty, bytearray(msg.encode("utf8"))
+                        )
+                        msg_ptr = builder.gep(msg_var, [ZERO, ZERO], inbounds=True)
+                        args.append(msg_ptr)
+                    elif arg.type == AST_NUMBER_CONSTANT:
+                        msg = arg.value + "\n\0"
+                        msg_ty = ir.ArrayType(BYTE, len(msg))
+                        msg_var = ir.GlobalVariable(
+                            module, msg_ty, name="num" + arg.value
+                        )
+                        msg_var.linkage = "internal"
+                        msg_var.global_constant = True
+                        msg_var.initializer = ir.Constant(
+                            msg_ty, bytearray(msg.encode("utf8"))
+                        )
+                        msg_ptr = builder.gep(msg_var, [ZERO, ZERO], inbounds=True)
+                        args.append(msg_ptr)
+                    elif arg.type == AST_VARIABLE_CALL:
+                        x_val = builder.load(
+                            obj[arg.name], name=x.name
+                        )  # read x, name=x.name+"val")  # read x
+                        args.append(x_val)
+                builder.call(std[x.name], args)
+
         elif x.type == AST_OBJECT_VARIABLE_DECLARATION:
             if obj.get(x.name) == None:
                 val_pool.append(x.name)
@@ -600,6 +634,8 @@ def evalAST(tr):
         if x.type == AST_FUNCTION_DEFINATION:
             fn_ty = ir.FunctionType(x.ret, x.args)
             fn = ir.Function(module, fn_ty, name=x.name)
+            if not x.name == "main":
+                std[x.name] = fn
             block = fn.append_basic_block("entry")
             builder = ir.IRBuilder(block)
             builder = evalFunction(builder, module, x.code, fn)

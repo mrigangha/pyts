@@ -1,4 +1,8 @@
 function test() {
+  print("Hello, World!");
+}
+function main() {
+  test();
   let a: i32 = 100;
   let b: i32 = 0;
   let c: i32 = 50;
@@ -10,7 +14,4 @@ function test() {
     }
     let a: i32 = a - 1;
   }
-}
-function main() {
-  test();
 }
