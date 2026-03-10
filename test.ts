@@ -1,7 +1,5 @@
-function test() {
+function test(b, c) {
   let a: i32 = 100;
-  let b: i32 = 0;
-  let c: i32 = 50;
   while (a > b) {
     if (a < c) {
       print("A is less than 50");
@@ -12,5 +10,6 @@ function test() {
   }
 }
 function main() {
-  test();
+  let b: i32 = 50;
+  test(b, 100);
 }

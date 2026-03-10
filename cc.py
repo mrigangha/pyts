@@ -66,6 +66,7 @@ AST_CONDITIONAL = "AST_CONDITIONAL"
 AST_IF = "AST_IF"
 AST_ELSE = "AST_ELSE"
 AST_WHILE = "AST_WHILE"
+AST_PARAM = "AST_PARAM"
 
 
 BYTE = ir.IntType(8)
@@ -116,6 +117,13 @@ class AstConditional:
     def __init__(self) -> None:
         self.type = AST_CONDITIONAL
         self.code = []
+
+
+class AstParam:
+    def __init__(self, name, dt=INT32) -> None:
+        self.name = name
+        self.type = AST_PARAM
+        self.dt = dt
 
 
 class AstIF:
@@ -306,8 +314,8 @@ def ParseLine(tokens, pc):
                         name = tokens[pc][0]
                         arg = AstVariableCall(name)
                     pc += 1
-
-                    fc.args.append(arg)
+                    if arg != "":
+                        fc.args.append(arg)
                 obj = fc
             pc += 1
         elif tokens[pc][1] == "KEYWORD":
@@ -385,13 +393,20 @@ def ParseFunctionDefination(tokens, pc):
             raise Exception("Expected ( :")
 
         args = []
+        pc += 1
         while tokens[pc][0] != ")":
-            # handle args
+            if tokens[pc][0] == ",":
+                pc += 1
+                continue
+            if tokens[pc][1] == "TEXT":
+                args.append(AstParam(tokens[pc][0]))
+            else:
+                raise Exception("Expected param name but found:", tokens[pc][0])
             pc += 1
 
         while tokens[pc][0] != "{":
             pc += 1
-        fd = AstFunctionDefination(name, [])
+        fd = AstFunctionDefination(name, args)
         pc += 1
         while tokens[pc][0] != "}":
             obj = ParseLine(tokens, pc)
@@ -525,18 +540,8 @@ def evalFunction(builder, module, code, fn, obj_={}):
                         msg_ptr = builder.gep(msg_var, [ZERO, ZERO], inbounds=True)
                         args.append(msg_ptr)
                     elif arg.type == AST_NUMBER_CONSTANT:
-                        msg = arg.value + "\n\0"
-                        msg_ty = ir.ArrayType(BYTE, len(msg))
-                        msg_var = ir.GlobalVariable(
-                            module, msg_ty, name="num" + arg.value
-                        )
-                        msg_var.linkage = "internal"
-                        msg_var.global_constant = True
-                        msg_var.initializer = ir.Constant(
-                            msg_ty, bytearray(msg.encode("utf8"))
-                        )
-                        msg_ptr = builder.gep(msg_var, [ZERO, ZERO], inbounds=True)
-                        args.append(msg_ptr)
+                        const = ir.Constant(INT32, int(arg.value))
+                        args.append(const)
                     elif arg.type == AST_VARIABLE_CALL:
                         x_val = builder.load(
                             obj[arg.name], name=x.name
@@ -632,14 +637,25 @@ def evalAST(tr):
 
     for x in tr:
         if x.type == AST_FUNCTION_DEFINATION:
-            fn_ty = ir.FunctionType(x.ret, x.args)
+            args = []
+            for e in x.args:
+                args.append(e.dt)
+            fn_ty = ir.FunctionType(x.ret, args)
             fn = ir.Function(module, fn_ty, name=x.name)
             if not x.name == "main":
                 std[x.name] = fn
             block = fn.append_basic_block("entry")
             builder = ir.IRBuilder(block)
-            builder = evalFunction(builder, module, x.code, fn)
+            for index, e in enumerate(x.args):
+                fn.args[index].name = e.name
+                alloca = builder.alloca(e.dt, name=e.name)
+                # 2. store the incoming value into it
+                builder.store(fn.args[index], alloca)
+                obj[e.name] = alloca
+            builder = evalFunction(builder, module, x.code, fn, obj)
             builder.ret(ir.Constant(INT32, 0))
+            for index, e in enumerate(x.args):
+                del obj[e.name]
     target = binding.Target.from_default_triple()
     tm = target.create_target_machine(reloc="static")
     mod = binding.parse_assembly(str(module))
