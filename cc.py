@@ -423,6 +423,9 @@ def ParseToAst(tokens):
     pc = 0
     program = []
     while pc < len(tokens):
+        if tokens[pc][0] == "\n":
+            pc += 1
+            continue
         obj = ParseFunctionDefination(tokens, pc)
         program.append(obj[1])
         pc = obj[0]
@@ -634,7 +637,6 @@ def evalAST(tr):
     std["i32_fmt_var"].initializer = ir.Constant(
         std["i32_fmt_ty"], bytearray(fmt.encode("utf8"))
     )
-
     for x in tr:
         if x.type == AST_FUNCTION_DEFINATION:
             args = []
