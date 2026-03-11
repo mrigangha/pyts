@@ -655,7 +655,9 @@ def evalAST(tr):
                 builder.store(fn.args[index], alloca)
                 obj[e.name] = alloca
             builder = evalFunction(builder, module, x.code, fn, obj)
-            builder.ret(ir.Constant(INT32, 0))
+            if not x.name == "main":
+                builder.ret(ir.Constant(INT32, 0))
+
             for index, e in enumerate(x.args):
                 del obj[e.name]
     target = binding.Target.from_default_triple()
