@@ -347,7 +347,29 @@ def ParseLine(tokens, pc):
                                 if tokens[pc][1] == "NUM":
                                     name += tokens[pc][0]
                                     pc += 1
-                                exp.operands.append(AstVariableCall(name))
+
+                                if tokens[pc][0] == "(":
+                                    fn = AstFunctionCall(name, [])
+                                    pc += 1
+                                    while tokens[pc][0] != ")":
+                                        if tokens[pc][1] == "TEXT":
+                                            arg = AstVariableCall(tokens[pc][0])
+                                            pc += 1
+                                            if tokens[pc][1] == "NUM":
+                                                arg.name += tokens[pc][0]
+                                                pc += 1
+                                            fn.args.append(arg)
+                                        elif tokens[pc][1] == "NUM":
+                                            arg = AstNumberConst(tokens[pc][0])
+                                            pc += 1
+                                            fn.args.append(arg)
+                                        elif tokens[pc][0] == ",":
+                                            pc += 1
+
+                                    pc += 1
+                                    exp.operands.append(fn)
+                                else:
+                                    exp.operands.append(AstVariableCall(name))
                             elif tokens[pc][1] == "NUM":
                                 exp.operands.append(AstNumberConst(tokens[pc][0]))
                                 pc += 1
@@ -370,6 +392,27 @@ def ParseLine(tokens, pc):
                 return ParseCondition(tokens, pc)
             elif tokens[pc][0] == "while":
                 return ParseWhile(tokens, pc)
+            elif tokens[pc][0] == "return":
+                obj = AstReturn()
+
+                pc += 1
+                if tokens[pc][1] == "NUM":
+                    obj.value = AstNumberConst(tokens[pc][0])
+                    pc += 1
+                elif tokens[pc][1] == "TEXT":
+                    name = tokens[pc][0]
+                    pc += 1
+                    if tokens[pc][1] == "NUM":
+                        name += tokens[pc][0]
+                        pc += 1
+                    obj.value = AstVariableCall(name)
+
+                else:
+                    raise Exception(
+                        "Expected a number or a variable but found:", tokens[pc][0]
+                    )
+                return (obj, pc)
+
     return (obj, pc)
 
 
@@ -427,6 +470,7 @@ def ParseToAst(tokens):
             pc += 1
             continue
         obj = ParseFunctionDefination(tokens, pc)
+
         program.append(obj[1])
         pc = obj[0]
         pc += 1
@@ -474,11 +518,13 @@ def evalConditional(obj, builder, module, fn, ast: AstConditional):
                 builder.cbranch(cond, blocks[i], end_block)
             builder = ir.IRBuilder(blocks[i])
             builder = evalFunction(builder, module, x.code, fn, obj)
-            builder.branch(end_block)
+            if not builder.block.is_terminated:
+                builder.branch(end_block)
         elif x.type == AST_ELSE:
             builder = ir.IRBuilder(blocks[i])
             evalFunction(builder, module, x.code, fn, obj)
-            builder.branch(end_block)
+            if not builder.block.is_terminated:
+                builder.branch(end_block)
     builder = ir.IRBuilder(end_block)
     return builder
 
@@ -562,6 +608,12 @@ def evalFunction(builder, module, code, fn, obj_={}):
             builder = evalConditional(obj, builder, module, fn, x)
         elif x.type == AST_WHILE:
             builder = evalWhile(obj, builder, module, fn, x)
+        elif x.type == AST_RETURN:
+            if x.value.type == AST_VARIABLE_CALL:
+                x_val = builder.load(obj[x.value.name], name=x.value.name)
+                builder.ret(x_val)
+            else:
+                builder.ret(ir.Constant(INT32, int(x.value.value)))
 
     for x in val_pool:
         del obj[x]
@@ -574,6 +626,50 @@ def evalNumericExpression(obj, name, module, builder, expression: AstSimpleExpre
     for x in expression.operands:
         if x in ("+", "/", "*", "-"):
             co = x
+        elif x.type == AST_FUNCTION_CALL:
+            args = []
+            for arg in x.args:
+                if arg.type == AST_STRING_CONSTANT:
+                    msg = arg.value + "\0"
+                    msg_ty = ir.ArrayType(BYTE, len(msg))
+                    msg_var = ir.GlobalVariable(module, msg_ty, name=arg.value)
+                    msg_var.linkage = "internal"
+                    msg_var.global_constant = True
+                    msg_var.initializer = ir.Constant(
+                        msg_ty, bytearray(msg.encode("utf8"))
+                    )
+                    msg_ptr = builder.gep(msg_var, [ZERO, ZERO], inbounds=True)
+                    args.append(msg_ptr)
+                elif arg.type == AST_NUMBER_CONSTANT:
+                    const = ir.Constant(INT32, int(arg.value))
+                    args.append(const)
+                elif arg.type == AST_VARIABLE_CALL:
+                    x_val = builder.load(
+                        obj[arg.name], name=x.name
+                    )  # read x, name=x.name+"val")  # read x
+                    args.append(x_val)
+            const = builder.call(std[x.name], args, name="result")
+            #                             ^^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^
+            #                             function   args       optional name for the SSA value
+            if co != None:
+                val2 = stack.pop()
+
+                if co == "+":
+                    temp = builder.add(const, val2, name="temp")
+                    stack.append(temp)
+                    co = None
+                elif co == "/":
+                    temp = builder.sdiv(val2, const, name="temp")
+                    stack.append(temp)
+                elif co == "*":
+                    temp = builder.mul(val2, const, name="temp")
+                    stack.append(temp)
+                elif co == "-":
+                    temp = builder.sub(val2, const, name="temp")
+                    stack.append(temp)
+            else:
+                stack.append(const)
+
         elif x.type == AST_NUMBER_CONSTANT:
             const = ir.Constant(INT32, int(x.value))
             if co != None:
@@ -655,9 +751,6 @@ def evalAST(tr):
                 builder.store(fn.args[index], alloca)
                 obj[e.name] = alloca
             builder = evalFunction(builder, module, x.code, fn, obj)
-            if not x.name == "main":
-                builder.ret(ir.Constant(INT32, 0))
-
             for index, e in enumerate(x.args):
                 del obj[e.name]
     target = binding.Target.from_default_triple()

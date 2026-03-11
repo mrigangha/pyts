@@ -1,11 +1,15 @@
-function max(a, b) {
+function max(a, b): number {
   if (a > b) {
-    print("a is greater than b");
+    return a;
   } else {
-    print("b is greater than or equal to a");
+    return b;
   }
+  return 0;
 }
 
 function main() {
-  max(1, 2);
+  let a: i32 = 4;
+  let c: i32 = (max(1, 2) / 2) * a;
+  print(c);
+  return 0;
 }
