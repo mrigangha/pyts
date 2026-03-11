@@ -9,7 +9,7 @@ function max(a, b): number {
 
 function main() {
   let a: i32 = 4;
-  let c: i32 = (max(1, 2) / 2) * a;
+  let c: i32 = (max(a, 2) / 2) * a;
   print(c);
   return 0;
 }
