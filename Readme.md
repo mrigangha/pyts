@@ -39,4 +39,9 @@ function max(a, b) {
     print("b is greater than or equal to a");
   }
 }
+
+function main() {
+  max(1, 2);
+}
+
 ```
