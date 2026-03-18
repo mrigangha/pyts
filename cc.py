@@ -28,13 +28,18 @@ def tokenise(code: str):
                 tokens.append((builder, "KEYWORD"))
                 continue
             tokens.append((builder, "TEXT"))
-        elif code[pc].isalnum():
+        elif code[pc].isdigit():
             builder = ""
-            builder = ""
-            while pc < len(code) and code[pc].isalnum():
+            isFloat = False
+            while pc < len(code) and (code[pc].isdigit() or code[pc] == "."):
+                if code[pc] == ".":
+                    isFloat = True
                 builder += code[pc]
                 pc += 1
-            tokens.append((builder, "NUM"))
+            if isFloat:
+                tokens.append((builder, "FLOAT"))
+            else:
+                tokens.append((builder, "NUM"))
         elif code[pc] == " ":
             if isStr:
                 tokens.append((code[pc], "WS"))
@@ -67,12 +72,16 @@ AST_IF = "AST_IF"
 AST_ELSE = "AST_ELSE"
 AST_WHILE = "AST_WHILE"
 AST_PARAM = "AST_PARAM"
+AST_FLOAT_CONSTANT = "AST_FLOAT_CONSTANT"
 
 
 BYTE = ir.IntType(8)
 BYTE_PTR = ir.PointerType(BYTE)
 SHORT = ir.IntType(16)
 INT32 = ir.IntType(32)
+INT64 = ir.IntType(64)
+FLOAT = ir.FloatType()
+
 NONE = -1
 VOID = ir.VoidType()
 ZERO = ir.Constant(INT32, 0)
@@ -177,6 +186,12 @@ class AstNumberConst:
         self.value = val
 
 
+class AstFloatConst:
+    def __init__(self, val) -> None:
+        self.type = AST_FLOAT_CONSTANT
+        self.value = val
+
+
 class AstBlock:
     pass
 
@@ -201,6 +216,8 @@ def ParseWhile(tokens, pc):
             elif tokens[pc][1] == "NUM":
                 exp.operands.append(AstNumberConst(tokens[pc][0]))
                 pc += 1
+            elif tokens[pc][1] == "FLOAT":
+                exp.operands.append(AstFloatConst(tokens[pc][0]))
             elif tokens[pc][1] == "SYM":
                 exp.operands.append(tokens[pc][0])
                 pc += 1
@@ -243,6 +260,9 @@ def ParseCondition(tokens, pc):
                     exp.operands.append(AstVariableCall(name))
                 elif tokens[pc][1] == "NUM":
                     exp.operands.append(AstNumberConst(tokens[pc][0]))
+                    pc += 1
+                elif tokens[pc][1] == "FLOAT":
+                    exp.operands.append(AstFloatConst(tokens[pc][0]))
                     pc += 1
                 elif tokens[pc][1] == "SYM":
                     exp.operands.append(tokens[pc][0])
@@ -310,6 +330,9 @@ def ParseLine(tokens, pc):
                     elif tokens[pc][1] == "NUM":
                         arg += str(tokens[pc][0])
                         arg = AstNumberConst(arg)
+                    elif tokens[pc][1] == "FLOAT":
+                        arg += str(tokens[pc][0])
+                        arg = AstFloatConst(arg)
                     elif tokens[pc][1] == "TEXT":
                         name = tokens[pc][0]
                         arg = AstVariableCall(name)
@@ -331,7 +354,11 @@ def ParseLine(tokens, pc):
 
                 pc += 1
                 fd = AstObjectVariableDeclaration(name)
-                if tokens[pc][0] + tokens[pc + 1][0] == "i32":
+                if (
+                    tokens[pc][0] + tokens[pc + 1][0] == "i32"
+                    or tokens[pc][0] + tokens[pc + 1][0] == "float32"
+                ):
+                    type_ = tokens[pc][0] + tokens[pc + 1][0]
                     pc += 1
                     pc += 1
                     if tokens[pc][0] == "=":
@@ -363,6 +390,10 @@ def ParseLine(tokens, pc):
                                             arg = AstNumberConst(tokens[pc][0])
                                             pc += 1
                                             fn.args.append(arg)
+                                        elif tokens[pc][1] == "FLOAT":
+                                            arg = AstFloatConst(tokens[pc][0])
+                                            pc += 1
+                                            fn.args.append(arg)
                                         elif tokens[pc][0] == ",":
                                             pc += 1
 
@@ -370,9 +401,13 @@ def ParseLine(tokens, pc):
                                     exp.operands.append(fn)
                                 else:
                                     exp.operands.append(AstVariableCall(name))
+                            elif tokens[pc][1] == "FLOAT":
+                                exp.operands.append(AstFloatConst(tokens[pc][0]))
+                                pc += 1
                             elif tokens[pc][1] == "NUM":
                                 exp.operands.append(AstNumberConst(tokens[pc][0]))
                                 pc += 1
+
                             elif tokens[pc][1] == "SYM":
                                 exp.operands.append(tokens[pc][0])
                                 pc += 1
@@ -383,11 +418,14 @@ def ParseLine(tokens, pc):
                                     + "Expected a variable or a number"
                                 )
                         fd.val = exp
+                        if type_ == "float32":
+                            fd.dt = FLOAT
                         # print(exp.operands)
                         pc -= 1
 
                     obj = fd
                     pc += 1
+
             elif tokens[pc][0] == "if":
                 return ParseCondition(tokens, pc)
             elif tokens[pc][0] == "while":
@@ -482,19 +520,29 @@ ast = ParseToAst(tokens)
 
 
 def evalWhile(obj, builder, module, fn, ast: AstWhile):
-    cond_block = fn.append_basic_block("cond")  # check condition
-    body_block = fn.append_basic_block("body")  # loop body
-    end_block = fn.append_basic_block("end")  # after loop
+    cond_block = fn.append_basic_block("cond")
+    body_block = fn.append_basic_block("body")
+    # ❌ REMOVE: end_block = fn.append_basic_block("end")  # too early!
+
     opr = ast.exp.operands
     builder.branch(cond_block)
+
+    # cond block
     builder = ir.IRBuilder(cond_block)
     val1 = builder.load(obj[opr[0].name], name=opr[0].name + "_val")
     val2 = builder.load(obj[opr[2].name], name=opr[2].name + "_val")
     cond = builder.icmp_signed(opr[1], val1, val2, name="cond")
+
+    # ✅ create end_block AFTER body blocks are built
+    end_block = fn.append_basic_block("end")
     builder.cbranch(cond, body_block, end_block)
+
+    # body block
     builder = ir.IRBuilder(body_block)
     builder = evalFunction(builder, module, ast.code, fn, obj)
     builder.branch(cond_block)
+
+    # end block (while exit)
     builder = ir.IRBuilder(end_block)
     return builder
 
@@ -536,7 +584,7 @@ def evalFunction(builder, module, code, fn, obj_={}):
         if x == None:
             continue
         elif x.type == AST_FUNCTION_CALL:
-            if x.name == "print":
+            if x.name == "print" or x.name == "printf":
                 args = []
                 for arg in x.args:
                     if arg.type == AST_STRING_CONSTANT:
@@ -550,7 +598,10 @@ def evalFunction(builder, module, code, fn, obj_={}):
                         )
                         msg_ptr = builder.gep(msg_var, [ZERO, ZERO], inbounds=True)
                         args.append(msg_ptr)
-                    elif arg.type == AST_NUMBER_CONSTANT:
+                    elif (
+                        arg.type == AST_NUMBER_CONSTANT
+                        or arg.type == AST_FLOAT_CONSTANT
+                    ):
                         msg = arg.value + "\n\0"
                         msg_ty = ir.ArrayType(BYTE, len(msg))
                         msg_var = ir.GlobalVariable(
@@ -563,15 +614,24 @@ def evalFunction(builder, module, code, fn, obj_={}):
                         )
                         msg_ptr = builder.gep(msg_var, [ZERO, ZERO], inbounds=True)
                         args.append(msg_ptr)
-                    elif arg.type == AST_VARIABLE_CALL:
-                        msg = "%d\n\0"
+                    elif arg.type == AST_VARIABLE_CALL and x.name == "printf":
+                        msg = "%f\n\0"
+                        fmt_ptr = builder.gep(
+                            std["f32_fmt_var"], [ZERO, ZERO], inbounds=True
+                        )
+                        args.append(fmt_ptr)
+                        x_val = builder.load(obj[arg.name], name=arg.name)
+                        x_val = builder.fpext(
+                            x_val, ir.DoubleType(), name=arg.name + "_d"
+                        )
+                        args.append(x_val)
+                    elif arg.type == AST_VARIABLE_CALL and x.name == "print":
+                        msg = "%f\n\0"
                         fmt_ptr = builder.gep(
                             std["i32_fmt_var"], [ZERO, ZERO], inbounds=True
                         )
                         args.append(fmt_ptr)
-                        x_val = builder.load(
-                            obj[arg.name], name=x.name
-                        )  # read x, name=x.name+"val")  # read x
+                        x_val = builder.load(obj[arg.name], name=arg.name)
                         args.append(x_val)
                 builder.call(std["print"], args)
             else:
@@ -620,7 +680,13 @@ def evalFunction(builder, module, code, fn, obj_={}):
     return builder
 
 
-def evalNumericExpression(obj, name, module, builder, expression: AstSimpleExpression):
+def evalNumericExpression(
+    obj,
+    name,
+    module,
+    builder,
+    expression: AstSimpleExpression,
+):
     co = None
     stack = []
     for x in expression.operands:
@@ -642,6 +708,9 @@ def evalNumericExpression(obj, name, module, builder, expression: AstSimpleExpre
                     args.append(msg_ptr)
                 elif arg.type == AST_NUMBER_CONSTANT:
                     const = ir.Constant(INT32, int(arg.value))
+                    args.append(const)
+                elif arg.type == AST_FLOAT_CONSTANT:
+                    const = ir.Constant(FLOAT, float(arg.value))
                     args.append(const)
                 elif arg.type == AST_VARIABLE_CALL:
                     x_val = builder.load(
@@ -671,7 +740,7 @@ def evalNumericExpression(obj, name, module, builder, expression: AstSimpleExpre
                 stack.append(const)
 
         elif x.type == AST_NUMBER_CONSTANT:
-            const = ir.Constant(INT32, int(x.value))
+            const = ir.Constant(INT32, int(float(x.value)))
             if co != None:
                 val2 = stack.pop()
 
@@ -681,6 +750,27 @@ def evalNumericExpression(obj, name, module, builder, expression: AstSimpleExpre
                     co = None
                 elif co == "/":
                     temp = builder.sdiv(val2, const, name="temp")
+                    stack.append(temp)
+                elif co == "*":
+                    temp = builder.mul(val2, const, name="temp")
+                    stack.append(temp)
+                elif co == "-":
+                    temp = builder.sub(val2, const, name="temp")
+                    stack.append(temp)
+            else:
+                stack.append(const)
+
+        elif x.type == AST_FLOAT_CONSTANT:
+            const = ir.Constant(FLOAT, float(x.value))
+            if co != None:
+                val2 = stack.pop()
+
+                if co == "+":
+                    temp = builder.add(const, val2, name="temp")
+                    stack.append(temp)
+                    co = None
+                elif co == "/":
+                    temp = builder.fdiv(val2, const, name="temp")
                     stack.append(temp)
                 elif co == "*":
                     temp = builder.mul(val2, const, name="temp")
@@ -725,13 +815,25 @@ def evalAST(tr):
         INT32, [BYTE_PTR], var_arg=True
     )  # returns i32 char* == ir.pointer of i8 and variable arguments=True
     std["print"] = ir.Function(module, printf_ty, name="printf")
-    fmt = "%d\n\0"
-    std["i32_fmt_ty"] = ir.ArrayType(BYTE, len(fmt))
-    std["i32_fmt_var"] = ir.GlobalVariable(module, std["i32_fmt_ty"], name="fmt")
+    int_fmt = "%d\n\0"
+    float_fmt = "%f\n\0"
+
+    # --- Integer format ---
+    std["i32_fmt_ty"] = ir.ArrayType(BYTE, len(int_fmt))
+    std["i32_fmt_var"] = ir.GlobalVariable(module, std["i32_fmt_ty"], name="i32_fmt")
     std["i32_fmt_var"].linkage = "internal"
     std["i32_fmt_var"].global_constant = True
     std["i32_fmt_var"].initializer = ir.Constant(
-        std["i32_fmt_ty"], bytearray(fmt.encode("utf8"))
+        std["i32_fmt_ty"], bytearray(int_fmt.encode("utf8"))
+    )
+
+    # --- Float format ---
+    std["f32_fmt_ty"] = ir.ArrayType(BYTE, len(float_fmt))
+    std["f32_fmt_var"] = ir.GlobalVariable(module, std["f32_fmt_ty"], name="f32_fmt")
+    std["f32_fmt_var"].linkage = "internal"
+    std["f32_fmt_var"].global_constant = True
+    std["f32_fmt_var"].initializer = ir.Constant(
+        std["f32_fmt_ty"], bytearray(float_fmt.encode("utf8"))
     )
     for x in tr:
         if x.type == AST_FUNCTION_DEFINATION:
@@ -755,6 +857,7 @@ def evalAST(tr):
                 del obj[e.name]
     target = binding.Target.from_default_triple()
     tm = target.create_target_machine(reloc="static")
+    print(str(module))
     mod = binding.parse_assembly(str(module))
     mod.verify()
     with open("output.o", "wb") as f:
